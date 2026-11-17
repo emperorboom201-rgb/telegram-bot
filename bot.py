@@ -1,11 +1,12 @@
 import os
+import asyncio
 from threading import Thread
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google import genai
 
-# Lấy Token và API Key an toàn từ cài đặt trên Render (không dán trực tiếp vào đây)
+# Lấy Token và API Key tự động từ cài đặt trên Render (không điền trực tiếp ở đây)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -26,32 +27,66 @@ def keep_alive():
 # -------------------------------------------------------------
 
 client = genai.Client(api_key=GEMINI_API_KEY)
-user_chats = {}
+user_histories = {}
+
+# Danh sách model ưu tiên: nếu model đầu quá tải (503), tự động chuyển sang model sau
+MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
+
+async def generate_with_fallback(history):
+    last_error = None
+    for model_name in MODELS:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=history
+                )
+                return response.text
+            except Exception as e:
+                last_error = e
+                if "503" in str(e) or "UNAVAILABLE" in str(e):
+                    await asyncio.sleep(2)
+                    continue
+                break
+    raise last_error
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
+    user_histories[user_id] = []
     await update.message.reply_text("Xin chào! Tôi là bot AI chạy 24/7. Bạn cần giúp gì hôm nay?")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
+    user_histories[user_id] = []
     await update.message.reply_text("Đã làm mới cuộc trò chuyện!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_chats:
-        user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
+    user_text = update.message.text
 
+    if user_id not in user_histories:
+        user_histories[user_id] = []
+
+    user_histories[user_id].append({"role": "user", "parts": [{"text": user_text}]})
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        response = user_chats[user_id].send_message(update.message.text)
-        text = response.text
-        for i in range(0, len(text), 4000):
-            await update.message.reply_text(text[i:i+4000])
+        reply_text = await generate_with_fallback(user_histories[user_id])
+        user_histories[user_id].append({"role": "model", "parts": [{"text": reply_text}]})
+
+        # Giữ lại 20 lượt tin nhắn gần nhất để tránh tràn bộ nhớ
+        if len(user_histories[user_id]) > 20:
+            user_histories[user_id] = user_histories[user_id][-20:]
+
+        for i in range(0, len(reply_text), 4000):
+            await update.message.reply_text(reply_text[i:i+4000])
+
     except Exception as e:
-        await update.message.reply_text(f"Có lỗi xảy ra: {str(e)}")
+        user_histories[user_id].pop()
+        if "503" in str(e):
+            await update.message.reply_text("Hệ thống AI đang quá tải tạm thời, bạn gửi lại tin nhắn sau vài giây nhé!")
+        else:
+            await update.message.reply_text(f"Có lỗi xảy ra: {str(e)}")
 
 def main():
     keep_alive()
