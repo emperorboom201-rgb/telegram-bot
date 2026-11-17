@@ -4,18 +4,18 @@ from threading import Thread
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai
-from google.genai import types
+from groq import AsyncGroq
 
+# Lấy Token và Key tự động từ Render (không dán trực tiếp vào đây để tránh lỗi đỏ GitHub)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 # --- Web Server giữ bot thức 24/7 trên Render ---
 app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot AI đang hoạt động siêu tốc!"
+    return "Bot Groq AI siêu tốc đang chạy!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -26,25 +26,22 @@ def keep_alive():
     t.start()
 # ------------------------------------------------
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = AsyncGroq(api_key=GROQ_API_KEY)
 user_histories = {}
 
-# Chỉ dùng các model chat tốc độ cao nhất, không dùng model ảnh/thử nghiệm
-FAST_MODELS = ["gemini-3.8-flash", "gemini-2.5-pro"]
-
-SYSTEM_PROMPT = (
-    "Bạn là một trợ lý AI thông minh, thân thiện và trả lời bằng tiếng Việt tự nhiên, "
-    "súc tích, đi thẳng vào trọng tâm."
-)
+SYSTEM_PROMPT = {
+    "role": "system",
+    "content": "Bạn là một trợ lý AI thông minh, thân thiện, trả lời bằng tiếng Việt tự nhiên, súc tích và đi thẳng vào trọng tâm."
+}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_histories[user_id] = []
-    await update.message.reply_text("Xin chào! Tôi đã sẵn sàng. Bạn cần hỗ trợ gì nào?")
+    user_histories[user_id] = [SYSTEM_PROMPT]
+    await update.message.reply_text("Xin chào! Tôi đã được nâng cấp tốc độ. Bạn cần giúp gì nào?")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_histories[user_id] = []
+    user_histories[user_id] = [SYSTEM_PROMPT]
     await update.message.reply_text("Đã xóa trí nhớ cũ. Mình bắt đầu chủ đề mới nhé!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,55 +49,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     if user_id not in user_histories:
-        user_histories[user_id] = []
+        user_histories[user_id] = [SYSTEM_PROMPT]
 
-    user_histories[user_id].append({"role": "user", "parts": [{"text": user_text}]})
+    user_histories[user_id].append({"role": "user", "content": user_text})
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     full_reply = ""
     sent_message = None
     last_edit_time = 0
-    success = False
-    last_error = None
 
-    for model_name in FAST_MODELS:
-        try:
-            # Dùng generate_content_stream để nhận chữ ngay lập tức như ChatGPT/Gemini
-            response_stream = client.models.generate_content_stream(
-                model=model_name,
-                contents=user_histories[user_id],
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.7,
-                )
-            )
+    try:
+        stream = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=user_histories[user_id],
+            temperature=0.7,
+            max_tokens=2048,
+            stream=True
+        )
 
-            for chunk in response_stream:
-                if chunk.text:
-                    full_reply += chunk.text
-                    now = time.time()
-                    # Gửi tin nhắn đầu tiên ngay khi có chữ, sau đó cập nhật mượt mỗi 0.8 giây
-                    if sent_message is None and len(full_reply.strip()) > 0:
-                        sent_message = await update.message.reply_text(full_reply[:4000] + " ▌")
-                        last_edit_time = now
-                    elif sent_message is not None and (now - last_edit_time) >= 0.8:
-                        if len(full_reply) <= 4000:
-                            try:
-                                await sent_message.edit_text(full_reply + " ▌")
-                                last_edit_time = now
-                            except Exception:
-                                pass
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                full_reply += delta
+                now = time.time()
+                if sent_message is None and len(full_reply.strip()) > 0:
+                    sent_message = await update.message.reply_text(full_reply[:4000] + " ▌")
+                    last_edit_time = now
+                elif sent_message is not None and (now - last_edit_time) >= 0.7:
+                    if len(full_reply) <= 4000:
+                        try:
+                            await sent_message.edit_text(full_reply + " ▌")
+                            last_edit_time = now
+                        except Exception:
+                            pass
 
-            success = True
-            break  # Thành công thì thoát vòng lặp ngay
-
-        except Exception as e:
-            last_error = e
-            full_reply = ""
-            continue  # Nếu model 1 lỗi (503/429), lập tức chuyển sang model 2 không chờ đợi
-
-    if success and full_reply:
-        # Hoàn thiện tin nhắn cuối cùng (bỏ dấu nháy ▌)
+        # Hoàn tất tin nhắn cuối cùng
         if len(full_reply) <= 4000:
             if sent_message:
                 try:
@@ -110,7 +93,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text(full_reply)
         else:
-            # Nếu câu trả lời quá dài (>4000 ký tự), chia làm nhiều tin nhắn
             if sent_message:
                 try:
                     await sent_message.edit_text(full_reply[:4000])
@@ -119,14 +101,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i in range(4000, len(full_reply), 4000):
                 await update.message.reply_text(full_reply[i:i+4000])
 
-        user_histories[user_id].append({"role": "model", "parts": [{"text": full_reply}]})
-        if len(user_histories[user_id]) > 20:
-            user_histories[user_id] = user_histories[user_id][-20:]
-    else:
+        user_histories[user_id].append({"role": "assistant", "content": full_reply})
+        if len(user_histories[user_id]) > 21:
+            user_histories[user_id] = [SYSTEM_PROMPT] + user_histories[user_id][-20:]
+
+    except Exception as e:
         user_histories[user_id].pop()
-        await update.message.reply_text(
-            "Máy chủ AI đang bận nhẹ, bạn gửi lại câu vừa rồi giúp mình nhé!"
-        )
+        await update.message.reply_text(f"Có lỗi kết nối: {str(e)}")
 
 def main():
     keep_alive()
@@ -134,7 +115,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("clear", clear))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Bot siêu tốc đang chạy...")
+    print("Bot Groq siêu tốc đang chạy...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
