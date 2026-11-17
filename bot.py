@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google import genai
 
-# Lấy Token và API Key an toàn từ cài đặt trên Render
+# Lấy Token và API Key an toàn từ cài đặt trên Render (không dán trực tiếp vào đây)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -47,7 +47,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = user_chats[user_id].send_message(update.message.text)
-        # Chia nhỏ tin nhắn nếu dài quá giới hạn 4096 ký tự của Telegram
         text = response.text
         for i in range(0, len(text), 4000):
             await update.message.reply_text(text[i:i+4000])
@@ -55,7 +54,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Có lỗi xảy ra: {str(e)}")
 
 def main():
-    keep_alive()  # Khởi chạy web server song song với bot
+    keep_alive()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("clear", clear))
