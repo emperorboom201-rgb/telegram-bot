@@ -39,7 +39,8 @@ async def get_best_groq_model():
     models_list = await client.models.list()
     excluded = ["whisper", "guard", "tts", "audio", "vision", "embed"]
     valid_models = [m.id for m in models_list.data if not any(kw in m.id.lower() for kw in excluded)]
-    for preferred in ["llama-4", "llama-3.3", "qwen", "deepseek", "llama-3.1-8b", "llama"]:
+    # Ưu tiên llama-3.1-8b và llama-3.3 trước vì hạn mức miễn phí rất cao và tốc độ cực nhanh
+    for preferred in ["llama-3.1-8b", "llama-3.3", "llama-4", "llama", "qwen", "deepseek"]:
         for m_id in valid_models:
             if preferred in m_id.lower():
                 cached_model = m_id
@@ -78,7 +79,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             model=active_model,
             messages=user_histories[user_id],
             temperature=0.7,
-            max_tokens=2048,
+            max_tokens=900,
             stream=True
         )
 
