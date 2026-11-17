@@ -29,17 +29,30 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 user_histories = {}
 
 def get_available_models():
-    """Tự động lấy danh sách model hỗ trợ chat từ API, ưu tiên gemini-3.8-flash"""
-    models = ["gemini-3.8-flash"]
+    """Chỉ lấy các model chat văn bản tiêu chuẩn, loại bỏ model ảnh/âm thanh/bản thử nghiệm"""
+    priority = ["gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+    models = []
+    excluded_keywords = ["embedding", "imagen", "veo", "image", "tts", "audio", "vision", "aqa", "bisect"]
+    
     try:
+        available = []
         for m in client.models.list():
             name = m.name.replace("models/", "")
-            if "gemini" in name and "embedding" not in name and "imagen" not in name and "veo" not in name:
-                if name not in models:
-                    models.append(name)
+            if "gemini" in name and not any(kw in name.lower() for kw in excluded_keywords):
+                available.append(name)
+        
+        # Xếp các model ưu tiên lên đầu nếu có trong danh sách khả dụng
+        for p in priority:
+            if p in available:
+                models.append(p)
+        # Thêm các model chat tiêu chuẩn khác làm dự phòng
+        for a in available:
+            if a not in models and "exp" not in a and "preview" not in a:
+                models.append(a)
     except Exception:
-        pass
-    return models[:5]  # Lấy tối đa 5 model để dự phòng
+        models = priority
+        
+    return models if models else priority
 
 async def generate_with_fallback(history):
     models = get_available_models()
@@ -55,11 +68,11 @@ async def generate_with_fallback(history):
             except Exception as e:
                 last_error = e
                 err_str = str(e)
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                if "503" in err_str or "UNAVAILABLE" in err_str:
                     await asyncio.sleep(2)
                     continue
-                if "404" in err_str or "NOT_FOUND" in err_str or "400" in err_str:
-                    break  # Bỏ qua model không hỗ trợ và chuyển ngay sang model tiếp theo
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "404" in err_str or "NOT_FOUND" in err_str or "400" in err_str:
+                    break  # Hết quota hoặc không hỗ trợ -> lập tức chuyển sang model tiếp theo
                 break
     raise last_error
 
@@ -97,6 +110,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_histories[user_id].pop()
         if "503" in str(e):
             await update.message.reply_text("Hệ thống AI đang quá tải tạm thời, bạn gửi lại tin nhắn sau vài giây nhé!")
+        elif "429" in str(e):
+            await update.message.reply_text("Tài khoản API miễn phí đã chạm giới hạn lượt dùng trong ngày, bạn thử lại sau ít phút hoặc tạo một API Key mới trên Google AI Studio nhé!")
         else:
             await update.message.reply_text(f"Có lỗi xảy ra: {str(e)}")
 
