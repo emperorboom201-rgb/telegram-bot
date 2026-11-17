@@ -30,18 +30,18 @@ user_chats = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_chats[user_id] = client.chats.create(model="gemini-2.5-flash")
+    user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
     await update.message.reply_text("Xin chào! Tôi là bot AI chạy 24/7. Bạn cần giúp gì hôm nay?")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_chats[user_id] = client.chats.create(model="gemini-2.5-flash")
+    user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
     await update.message.reply_text("Đã làm mới cuộc trò chuyện!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_chats:
-        user_chats[user_id] = client.chats.create(model="gemini-2.5-flash")
+        user_chats[user_id] = client.chats.create(model="gemini-3.8-flash")
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
