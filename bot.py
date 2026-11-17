@@ -6,7 +6,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from google import genai
 
-# Lấy Token và API Key tự động từ cài đặt trên Render (không điền trực tiếp ở đây)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -29,12 +28,23 @@ def keep_alive():
 client = genai.Client(api_key=GEMINI_API_KEY)
 user_histories = {}
 
-# Danh sách model ưu tiên: nếu model đầu quá tải (503), tự động chuyển sang model sau
-MODELS = ["gemini-3.8-flash", "gemini-3.8-flash-lite"]
+def get_available_models():
+    """Tự động lấy danh sách model hỗ trợ chat từ API, ưu tiên gemini-3.8-flash"""
+    models = ["gemini-3.8-flash"]
+    try:
+        for m in client.models.list():
+            name = m.name.replace("models/", "")
+            if "gemini" in name and "embedding" not in name and "imagen" not in name and "veo" not in name:
+                if name not in models:
+                    models.append(name)
+    except Exception:
+        pass
+    return models[:5]  # Lấy tối đa 5 model để dự phòng
 
 async def generate_with_fallback(history):
+    models = get_available_models()
     last_error = None
-    for model_name in MODELS:
+    for model_name in models:
         for attempt in range(2):
             try:
                 response = client.models.generate_content(
@@ -44,9 +54,12 @@ async def generate_with_fallback(history):
                 return response.text
             except Exception as e:
                 last_error = e
-                if "503" in str(e) or "UNAVAILABLE" in str(e):
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
                     await asyncio.sleep(2)
                     continue
+                if "404" in err_str or "NOT_FOUND" in err_str or "400" in err_str:
+                    break  # Bỏ qua model không hỗ trợ và chuyển ngay sang model tiếp theo
                 break
     raise last_error
 
@@ -74,7 +87,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_text = await generate_with_fallback(user_histories[user_id])
         user_histories[user_id].append({"role": "model", "parts": [{"text": reply_text}]})
 
-        # Giữ lại 20 lượt tin nhắn gần nhất để tránh tràn bộ nhớ
         if len(user_histories[user_id]) > 20:
             user_histories[user_id] = user_histories[user_id][-20:]
 
